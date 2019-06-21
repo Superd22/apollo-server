@@ -14,6 +14,8 @@ import {
   ValidationContext,
   FieldDefinitionNode,
   DocumentNode,
+  isObjectType,
+  isScalarType,
 } from 'graphql';
 import { GraphQLExtension } from 'graphql-extensions';
 import {
@@ -363,9 +365,18 @@ export class ApolloServerBase {
         .digest('hex');
     }
 
+    const schemaIsFederated = this.schemaIsFederated();
     if (this.engineServiceId) {
+      if (schemaIsFederated) {
+        // XXX should this throw instead? or be left out?
+        console.warn(
+          "It looks like you're running a federated schema and you've configured your service " +
+            'to report metrics to Apollo Engine. You should only configure your Apollo gateway ' +
+            'to report metrics to Apollo Engine.',
+        );
+      }
       const { EngineReportingAgent } = require('apollo-engine-reporting');
-      this.engineReportingAgent = new EngineReportingAgent(
+      const engineReportingAgent = new EngineReportingAgent(
         typeof engine === 'object' ? engine : Object.create(null),
         {
           schema: this.schema,
@@ -375,8 +386,21 @@ export class ApolloServerBase {
           },
         },
       );
+      this.engineReportingAgent = engineReportingAgent;
       // Let's keep this extension second so it wraps everything, except error formatting
-      this.extensions.push(() => this.engineReportingAgent!.newExtension());
+      this.extensions.push(() => engineReportingAgent.newExtension());
+    } else if (engine !== false && this.schemaIsFederated()) {
+      // We haven't configured this app to use Engine directly. But it looks like
+      // we are a federated service backend, so we should be capable of including
+      // our trace in a response extension if we are asked to by the gateway.
+      const {
+        EngineFederatedTracingExtension,
+      } = require('apollo-engine-reporting');
+      const rewriteError =
+        engine && typeof engine === 'object' ? engine.rewriteError : undefined;
+      this.extensions.push(
+        () => new EngineFederatedTracingExtension({ rewriteError }),
+      );
     }
 
     if (extensions) {
@@ -517,6 +541,31 @@ export class ApolloServerBase {
 
   protected supportsUploads(): boolean {
     return false;
+  }
+
+  // Returns true if it appears that the schema was returned from
+  // @apollo/federation's buildFederatedSchema. This strategy avoids depending
+  // explicitly on @apollo/federation or relying on something that might not
+  // survive transformations like monkey-patching a boolean field onto the
+  // schema.
+  //
+  // The only thing this is used for is determining whether traces should be
+  // added to responses if requested with an HTTP header; if there's a false
+  // positive, that feature can be disabled by specifying `engine: false`.
+  private schemaIsFederated(): boolean {
+    const serviceType = this.schema.getType('_Service');
+    if (!(serviceType && isObjectType(serviceType))) {
+      return false;
+    }
+    const sdlField = serviceType.getFields().sdl;
+    if (!sdlField) {
+      return false;
+    }
+    const sdlFieldType = sdlField.type;
+    if (!isScalarType(sdlFieldType)) {
+      return false;
+    }
+    return sdlFieldType.name == 'String';
   }
 
   private ensurePluginInstantiation(plugins?: PluginDefinition[]): void {
