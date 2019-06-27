@@ -1,6 +1,7 @@
 import { GraphQLResolveInfo, GraphQLError } from 'graphql';
-import { GraphQLExtension } from 'graphql-extensions';
+import { GraphQLExtension, EndHandler } from 'graphql-extensions';
 import { Trace } from 'apollo-engine-reporting-protobuf';
+import { GraphQLRequestContext } from 'apollo-server-core/dist/requestPipelineAPI';
 
 import { EngineReportingTreeBuilder } from './treeBuilder';
 
@@ -11,7 +12,7 @@ interface FederatedTraceV1 {
 
 export class EngineFederatedTracingExtension<TContext = any>
   implements GraphQLExtension<TContext> {
-  public trace = new Trace();
+  private enabled = false;
   private treeBuilder: EngineReportingTreeBuilder;
   private result?: { durationNs: number; rootNode: Trace.Node };
 
@@ -23,9 +24,21 @@ export class EngineFederatedTracingExtension<TContext = any>
     });
   }
 
-  public requestDidStart(_options: any) {
-    // XXX only do things if we get the header
-    this.treeBuilder.startTiming();
+  public requestDidStart(o: {
+    requestContext: GraphQLRequestContext<TContext>;
+  }) {
+    // XXX Provide a mechanism to customize this logic.
+    const http = o.requestContext.request.http;
+    if (
+      http &&
+      http.headers.get('apollo-federation-include-trace') === 'ftv1'
+    ) {
+      this.enabled = true;
+    }
+
+    if (this.enabled) {
+      this.treeBuilder.startTiming();
+    }
   }
 
   public willResolveField(
@@ -34,26 +47,35 @@ export class EngineFederatedTracingExtension<TContext = any>
     _context: TContext,
     info: GraphQLResolveInfo,
   ): ((error: Error | null, result: any) => void) | void {
-    return this.treeBuilder.willResolveField(info);
+    if (this.enabled) {
+      return this.treeBuilder.willResolveField(info);
+    }
   }
 
   public didEncounterErrors(errors: GraphQLError[]) {
-    this.treeBuilder.didEncounterErrors(errors);
+    if (this.enabled) {
+      this.treeBuilder.didEncounterErrors(errors);
+    }
   }
 
-  public executionDidStart() {
-    // It's a little odd that we record the end time after execution rather than
-    // at the end of the whole request, but because we need to include our
-    // formatted trace in the request itself, we have to record it before the
-    // request is over!  It's also odd that we don't do traces for parse or
-    // validation errors, but runQuery doesn't currently support that, as
-    // format() is only invoked after execution.
-    return () => {
-      this.result = this.treeBuilder.stopTiming();
-    };
+  public executionDidStart(): EndHandler | void {
+    if (this.enabled) {
+      // It's a little odd that we record the end time after execution rather than
+      // at the end of the whole request, but because we need to include our
+      // formatted trace in the request itself, we have to record it before the
+      // request is over!  It's also odd that we don't do traces for parse or
+      // validation errors, but runQuery doesn't currently support that, as
+      // format() is only invoked after execution.
+      return () => {
+        this.result = this.treeBuilder.stopTiming();
+      };
+    }
   }
 
-  public format(): [string, FederatedTraceV1] {
+  public format(): [string, FederatedTraceV1] | undefined {
+    if (!this.enabled) {
+      return;
+    }
     if (!this.result) {
       throw Error('format called before end of execution?');
     }
