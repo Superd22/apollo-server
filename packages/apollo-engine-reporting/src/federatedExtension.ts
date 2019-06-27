@@ -5,7 +5,7 @@ import { GraphQLRequestContext } from 'apollo-server-core/dist/requestPipelineAP
 
 import { EngineReportingTreeBuilder } from './treeBuilder';
 
-interface FederatedTraceV1 {
+export interface FederatedTraceV1 {
   d: number;
   t: string; // base64 encoding of protobuf of Trace.Node
 }

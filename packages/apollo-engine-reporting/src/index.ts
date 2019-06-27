@@ -1,2 +1,5 @@
 export { EngineReportingOptions, EngineReportingAgent } from './agent';
-export { EngineFederatedTracingExtension } from './federatedExtension';
+export {
+  FederatedTraceV1,
+  EngineFederatedTracingExtension,
+} from './federatedExtension';

@@ -6,7 +6,7 @@ import express = require('express');
 import bodyParser = require('body-parser');
 import yup = require('yup');
 
-import { FullTracesReport } from 'apollo-engine-reporting-protobuf';
+import { FullTracesReport, Trace } from 'apollo-engine-reporting-protobuf';
 
 import {
   GraphQLSchema,
@@ -49,7 +49,11 @@ import ApolloServerPluginResponseCache from 'apollo-server-plugin-response-cache
 import { GraphQLRequestContext } from 'apollo-server-plugin-base';
 
 import { mockDate, unmockDate, advanceTimeBy } from '__mocks__/date';
-import { EngineReportingOptions } from 'apollo-engine-reporting';
+import {
+  EngineReportingOptions,
+  FederatedTraceV1,
+} from 'apollo-engine-reporting';
+import { basename } from 'path';
 
 export function createServerInfo<AS extends ApolloServerBase>(
   server: AS,
@@ -1847,12 +1851,125 @@ export function testApolloServer<AS extends ApolloServerBase>(
         const latestEndOffset = tracing.execution.resolvers
           .map(resolver => resolver.startOffset + resolver.duration)
           .reduce((currentLatestEndOffset, nextEndOffset) =>
-            Math.min(currentLatestEndOffset, nextEndOffset),
+            Math.max(currentLatestEndOffset, nextEndOffset),
           );
 
         const resolverDuration = latestEndOffset - earliestStartOffset;
 
         expect(resolverDuration).not.toBeGreaterThan(tracing.duration);
+      });
+    });
+
+    describe('Federated tracing', () => {
+      // Enable federated tracing by pretending to be federated.
+      const federationTypeDefs = gql`
+        type _Service {
+          sdl: String
+        }
+      `;
+
+      const baseTypeDefs = gql`
+        type Book {
+          title: String
+          author: String
+        }
+
+        type Movie {
+          title: String
+        }
+
+        type Query {
+          books: [Book]
+          movies: [Movie]
+        }
+      `;
+
+      const allTypeDefs = [federationTypeDefs, baseTypeDefs];
+
+      const resolvers = {
+        Query: {
+          books: () =>
+            new Promise(resolve =>
+              setTimeout(() => resolve([{ title: 'H', author: 'J' }]), 10),
+            ),
+          movies: () =>
+            new Promise(resolve =>
+              setTimeout(() => resolve([{ title: 'H' }]), 12),
+            ),
+        },
+      };
+
+      function createApolloFetchAsIfFromGateway(uri: string): ApolloFetch {
+        return createApolloFetch({ uri }).use(({ options }, next) => {
+          options.headers = { 'apollo-federation-include-trace': 'ftv1' };
+          next();
+        });
+      }
+
+      it("doesn't include federated trace without the special header", async () => {
+        const { url: uri } = await createApolloServer({
+          typeDefs: allTypeDefs,
+          resolvers,
+        });
+
+        const apolloFetch = createApolloFetch({ uri });
+
+        const result = await apolloFetch({
+          query: `{ books { title author } }`,
+        });
+
+        expect(result.extensions).toBeUndefined();
+      });
+
+      it("doesn't include federated trace without _Service in the schema", async () => {
+        const { url: uri } = await createApolloServer({
+          typeDefs: baseTypeDefs,
+          resolvers,
+        });
+
+        const apolloFetch = createApolloFetchAsIfFromGateway(uri);
+
+        const result = await apolloFetch({
+          query: `{ books { title author } }`,
+        });
+
+        expect(result.extensions).toBeUndefined();
+      });
+
+      it('reports a total duration that is longer than the duration of its resolvers', async () => {
+        const { url: uri } = await createApolloServer({
+          typeDefs: allTypeDefs,
+          resolvers,
+        });
+
+        const apolloFetch = createApolloFetchAsIfFromGateway(uri);
+        apolloFetch.use(({ options }, next) => {
+          options.headers = { 'apollo-federation-include-trace': 'ftv1' };
+          next();
+        });
+
+        const result = await apolloFetch({
+          query: `{ books { title author } }`,
+        });
+
+        const ftv1: FederatedTraceV1 = result.extensions.ftv1;
+
+        expect(ftv1).toBeTruthy();
+        expect(ftv1.d).toBeGreaterThan(0);
+        const encoded = Buffer.from(ftv1.t, 'base64');
+        const root = Trace.Node.decode(encoded);
+
+        let earliestStartOffset = Infinity;
+        let latestEndOffset = -Infinity;
+        function walk(node: Trace.INode) {
+          earliestStartOffset = Math.min(earliestStartOffset, node.startTime);
+          latestEndOffset = Math.max(latestEndOffset, node.endTime);
+          node.child.forEach(n => walk(n));
+        }
+        walk(root);
+        const resolverDuration = latestEndOffset - earliestStartOffset;
+
+        expect(resolverDuration).not.toBeGreaterThan(ftv1.d);
       });
     });
 
