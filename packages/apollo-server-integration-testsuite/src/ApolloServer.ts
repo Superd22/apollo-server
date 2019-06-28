@@ -1966,7 +1966,17 @@ export function testApolloServer<AS extends ApolloServerBase>(
         expect(earliestStartOffset).toBeLessThan(Infinity);
         expect(latestEndOffset).toBeGreaterThan(-Infinity);
         const resolverDuration = latestEndOffset - earliestStartOffset;
-        expect(resolverDuration).not.toBeGreaterThan(trace.durationNs);
+        expect(resolverDuration).toBeGreaterThan(0);
+        expect(trace.durationNs).toBeGreaterThanOrEqual(resolverDuration);
+
+        expect(trace.startTime.seconds).toBeLessThanOrEqual(
+          trace.endTime.seconds,
+        );
+        if (trace.startTime.seconds === trace.endTime.seconds) {
+          expect(trace.startTime.nanos).toBeLessThanOrEqual(
+            trace.endTime.nanos,
+          );
+        }
       });
     });
 
