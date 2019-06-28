@@ -5,16 +5,11 @@ import { GraphQLRequestContext } from 'apollo-server-core/dist/requestPipelineAP
 
 import { EngineReportingTreeBuilder } from './treeBuilder';
 
-export interface FederatedTraceV1 {
-  d: number;
-  t: string; // base64 encoding of protobuf of Trace.Node
-}
-
 export class EngineFederatedTracingExtension<TContext = any>
   implements GraphQLExtension<TContext> {
   private enabled = false;
+  private done = false;
   private treeBuilder: EngineReportingTreeBuilder;
-  private result?: { durationNs: number; rootNode: Trace.Node };
 
   public constructor(options: {
     rewriteError?: (err: GraphQLError) => GraphQLError | null;
@@ -67,30 +62,27 @@ export class EngineFederatedTracingExtension<TContext = any>
       // validation errors, but runQuery doesn't currently support that, as
       // format() is only invoked after execution.
       return () => {
-        this.result = this.treeBuilder.stopTiming();
+        this.treeBuilder.stopTiming();
+        this.done = true;
       };
     }
   }
 
-  public format(): [string, FederatedTraceV1] | undefined {
+  // The ftv1 extension is a base64'd Trace protobuf containing only the
+  // durationNs, startTime, endTime, and root fields.
+  public format(): [string, string] | undefined {
     if (!this.enabled) {
       return;
     }
-    if (!this.result) {
+    if (!this.done) {
       throw Error('format called before end of execution?');
     }
-    const encodedUint8Array = Trace.Node.encode(this.result.rootNode).finish();
+    const encodedUint8Array = Trace.encode(this.treeBuilder.trace).finish();
     const encodedBuffer = Buffer.from(
       encodedUint8Array,
       encodedUint8Array.byteOffset,
       encodedUint8Array.byteLength,
     );
-    return [
-      'ftv1',
-      {
-        d: this.result.durationNs,
-        t: encodedBuffer.toString('base64'),
-      },
-    ];
+    return ['ftv1', encodedBuffer.toString('base64')];
   }
 }

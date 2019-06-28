@@ -4,12 +4,13 @@ import {
   ResponsePath,
   responsePathAsArray,
 } from 'graphql';
-import { Trace } from 'apollo-engine-reporting-protobuf';
+import { Trace, google } from 'apollo-engine-reporting-protobuf';
 
 export class EngineReportingTreeBuilder {
+  private rootNode = new Trace.Node();
+  public trace = new Trace({ root: this.rootNode });
   private startHrTime?: [number, number];
   private stopped = false;
-  private rootNode = new Trace.Node();
   private nodes = new Map<string, Trace.Node>([
     [rootResponsePath, this.rootNode],
   ]);
@@ -28,10 +29,11 @@ export class EngineReportingTreeBuilder {
     if (this.stopped) {
       throw Error('startTiming called after stopTiming!');
     }
+    this.trace.startTime = dateToProtoTimestamp(new Date());
     this.startHrTime = process.hrtime();
   }
 
-  public stopTiming(): { durationNs: number; rootNode: Trace.Node } {
+  public stopTiming() {
     if (!this.startHrTime) {
       throw Error('stopTiming called before startTiming!');
     }
@@ -39,11 +41,11 @@ export class EngineReportingTreeBuilder {
       throw Error('stopTiming called twice!');
     }
 
+    this.trace.durationNs = durationHrTimeToNanos(
+      process.hrtime(this.startHrTime),
+    );
+    this.trace.endTime = dateToProtoTimestamp(new Date());
     this.stopped = true;
-    return {
-      durationNs: durationHrTimeToNanos(process.hrtime(this.startHrTime)),
-      rootNode: this.rootNode,
-    };
   }
 
   public willResolveField(info: GraphQLResolveInfo): () => void {
@@ -221,5 +223,15 @@ function errorToProtobufError(error: GraphQLError): Trace.Error {
       ({ line, column }) => new Trace.Location({ line, column }),
     ),
     json: JSON.stringify(error),
+  });
+}
+
+// Converts a JS Date into a Timestamp.
+export function dateToProtoTimestamp(date: Date): google.protobuf.Timestamp {
+  const totalMillis = +date;
+  const millis = totalMillis % 1000;
+  return new google.protobuf.Timestamp({
+    seconds: (totalMillis - millis) / 1000,
+    nanos: millis * 1e6,
   });
 }

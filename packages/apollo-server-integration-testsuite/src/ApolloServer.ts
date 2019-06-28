@@ -1,6 +1,5 @@
 /* tslint:disable:no-unused-expression */
 import http from 'http';
-import net from 'net';
 import { sha256 } from 'js-sha256';
 import express = require('express');
 import bodyParser = require('body-parser');
@@ -48,19 +47,15 @@ import { TracingFormat } from 'apollo-tracing';
 import ApolloServerPluginResponseCache from 'apollo-server-plugin-response-cache';
 import { GraphQLRequestContext } from 'apollo-server-plugin-base';
 
-import { mockDate, unmockDate, advanceTimeBy } from '__mocks__/date';
-import {
-  EngineReportingOptions,
-  FederatedTraceV1,
-} from 'apollo-engine-reporting';
-import { basename } from 'path';
+import { mockDate, unmockDate, advanceTimeBy } from '../../../__mocks__/date';
+import { EngineReportingOptions } from 'apollo-engine-reporting';
 
 export function createServerInfo<AS extends ApolloServerBase>(
   server: AS,
   httpServer: http.Server,
 ): ServerInfo<AS> {
   const serverInfo: any = {
-    ...(httpServer.address() as net.AddressInfo),
+    ...httpServer.address(),
     server,
     httpServer,
   };
@@ -611,7 +606,7 @@ export function testApolloServer<AS extends ApolloServerBase>(
             }
 
             return new Promise(resolve => {
-              this.server && this.server.close(resolve);
+              this.server && this.server.close(() => resolve());
             });
           }
 
@@ -625,11 +620,7 @@ export function testApolloServer<AS extends ApolloServerBase>(
             if (!this.server) {
               throw new Error('must listen before getting URL');
             }
-            const {
-              family,
-              address,
-              port,
-            } = this.server.address() as net.AddressInfo;
+            const { family, address, port } = this.server.address();
 
             if (family !== 'IPv4') {
               throw new Error(`The family was unexpectedly ${family}.`);
@@ -1190,7 +1181,7 @@ export function testApolloServer<AS extends ApolloServerBase>(
           `;
           const resolvers = {
             Query: {
-              hello: (_parent, _args, context) => {
+              hello: (_parent: any, _args: any, context: any) => {
                 expect(context).toEqual(Promise.resolve(uniqueContext));
                 return 'hi';
               },
@@ -1223,7 +1214,7 @@ export function testApolloServer<AS extends ApolloServerBase>(
           `;
           const resolvers = {
             Query: {
-              hello: (_parent, _args, context) => {
+              hello: (_parent: any, _args: any, context: any) => {
                 expect(context.key).toEqual('major');
                 context.key = 'minor';
                 return spy();
@@ -1277,7 +1268,7 @@ export function testApolloServer<AS extends ApolloServerBase>(
             `;
             const resolvers = {
               Query: {
-                hello: (_parent, _args, context) => {
+                hello: (_parent: any, _args: any, context: any) => {
                   expect(context.key).toEqual('major');
                   return spy();
                 },
@@ -1427,9 +1418,13 @@ export function testApolloServer<AS extends ApolloServerBase>(
     describe('subscriptions', () => {
       const SOMETHING_CHANGED_TOPIC = 'something_changed';
       const pubsub = new PubSub();
-      let subscription;
+      let subscription:
+        | {
+            unsubscribe: () => void;
+          }
+        | undefined;
 
-      function createEvent(num) {
+      function createEvent(num: number) {
         return setTimeout(
           () =>
             pubsub.publish(SOMETHING_CHANGED_TOPIC, {
@@ -1952,24 +1947,26 @@ export function testApolloServer<AS extends ApolloServerBase>(
           query: `{ books { title author } }`,
         });
 
-        const ftv1: FederatedTraceV1 = result.extensions.ftv1;
+        const ftv1: string = result.extensions.ftv1;
 
         expect(ftv1).toBeTruthy();
-        expect(ftv1.d).toBeGreaterThan(0);
-        const encoded = Buffer.from(ftv1.t, 'base64');
-        const root = Trace.Node.decode(encoded);
+        const encoded = Buffer.from(ftv1, 'base64');
+        const trace = Trace.decode(encoded);
 
         let earliestStartOffset = Infinity;
         let latestEndOffset = -Infinity;
         function walk(node: Trace.INode) {
-          earliestStartOffset = Math.min(earliestStartOffset, node.startTime);
-          latestEndOffset = Math.max(latestEndOffset, node.endTime);
+          if (node.startTime !== 0 && node.endTime !== 0) {
+            earliestStartOffset = Math.min(earliestStartOffset, node.startTime);
+            latestEndOffset = Math.max(latestEndOffset, node.endTime);
+          }
           node.child.forEach(n => walk(n));
         }
-        walk(root);
+        walk(trace.root);
+        expect(earliestStartOffset).toBeLessThan(Infinity);
+        expect(latestEndOffset).toBeGreaterThan(-Infinity);
         const resolverDuration = latestEndOffset - earliestStartOffset;
-
-        expect(resolverDuration).not.toBeGreaterThan(ftv1.d);
+        expect(resolverDuration).not.toBeGreaterThan(trace.durationNs);
       });
     });
 

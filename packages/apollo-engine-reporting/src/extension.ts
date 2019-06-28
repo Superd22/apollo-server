@@ -7,7 +7,7 @@ import {
   GraphQLError,
 } from 'graphql';
 import { GraphQLExtension, EndHandler } from 'graphql-extensions';
-import { Trace, google } from 'apollo-engine-reporting-protobuf';
+import { Trace } from 'apollo-engine-reporting-protobuf';
 
 import {
   EngineReportingOptions,
@@ -31,7 +31,6 @@ const clientVersionHeaderKey = 'apollographql-client-version';
 // Its public methods all implement the GraphQLExtension interface.
 export class EngineReportingExtension<TContext = any>
   implements GraphQLExtension<TContext> {
-  public trace = new Trace();
   private treeBuilder: EngineReportingTreeBuilder;
   private explicitOperationName?: string | null;
   private queryString?: string;
@@ -68,7 +67,6 @@ export class EngineReportingExtension<TContext = any>
       'metrics' | 'queryHash'
     >;
   }): EndHandler {
-    this.trace.startTime = dateToTimestamp(new Date());
     this.treeBuilder.startTiming();
 
     // Generally, we'll get queryString here and not parsedQuery; we only get
@@ -78,7 +76,7 @@ export class EngineReportingExtension<TContext = any>
     this.queryString = o.queryString;
     this.documentAST = o.parsedQuery;
 
-    this.trace.http = new Trace.HTTP({
+    this.treeBuilder.trace.http = new Trace.HTTP({
       method:
         Trace.HTTP.Method[o.request.method as keyof typeof Trace.HTTP.Method] ||
         Trace.HTTP.Method.UNKNOWN,
@@ -95,21 +93,21 @@ export class EngineReportingExtension<TContext = any>
 
     if (this.options.sendHeaders) {
       makeHTTPRequestHeaders(
-        this.trace.http,
+        this.treeBuilder.trace.http,
         o.request.headers,
         this.options.sendHeaders,
       );
 
       if (o.requestContext.metrics.persistedQueryHit) {
-        this.trace.persistedQueryHit = true;
+        this.treeBuilder.trace.persistedQueryHit = true;
       }
       if (o.requestContext.metrics.persistedQueryRegister) {
-        this.trace.persistedQueryRegister = true;
+        this.treeBuilder.trace.persistedQueryRegister = true;
       }
     }
 
     if (o.variables) {
-      this.trace.details = makeTraceDetails(
+      this.treeBuilder.trace.details = makeTraceDetails(
         o.variables,
         this.options.sendVariableValues,
         o.queryString,
@@ -124,22 +122,19 @@ export class EngineReportingExtension<TContext = any>
       const { clientName, clientVersion, clientReferenceId } = clientInfo;
       // the backend makes the choice of mapping clientName => clientReferenceId if
       // no custom reference id is provided
-      this.trace.clientVersion = clientVersion || '';
-      this.trace.clientReferenceId = clientReferenceId || '';
-      this.trace.clientName = clientName || '';
+      this.treeBuilder.trace.clientVersion = clientVersion || '';
+      this.treeBuilder.trace.clientReferenceId = clientReferenceId || '';
+      this.treeBuilder.trace.clientName = clientName || '';
     }
 
     return () => {
-      const { durationNs, rootNode } = this.treeBuilder.stopTiming();
-      this.trace.durationNs = durationNs;
-      this.trace.root = rootNode;
-      this.trace.endTime = dateToTimestamp(new Date());
+      this.treeBuilder.stopTiming();
 
-      this.trace.fullQueryCacheHit = !!o.requestContext.metrics
+      this.treeBuilder.trace.fullQueryCacheHit = !!o.requestContext.metrics
         .responseCacheHit;
-      this.trace.forbiddenOperation = !!o.requestContext.metrics
+      this.treeBuilder.trace.forbiddenOperation = !!o.requestContext.metrics
         .forbiddenOperation;
-      this.trace.registeredOperation = !!o.requestContext.metrics
+      this.treeBuilder.trace.registeredOperation = !!o.requestContext.metrics
         .registeredOperation;
 
       // If the user did not explicitly specify an operation name (which we
@@ -158,7 +153,7 @@ export class EngineReportingExtension<TContext = any>
         queryHash,
         documentAST,
         queryString: this.queryString || '',
-        trace: this.trace,
+        trace: this.treeBuilder.trace,
       });
     };
   }
@@ -197,16 +192,6 @@ export class EngineReportingExtension<TContext = any>
 }
 
 // Helpers for producing traces.
-
-// Converts a JS Date into a Timestamp.
-function dateToTimestamp(date: Date): google.protobuf.Timestamp {
-  const totalMillis = +date;
-  const millis = totalMillis % 1000;
-  return new google.protobuf.Timestamp({
-    seconds: (totalMillis - millis) / 1000,
-    nanos: millis * 1e6,
-  });
-}
 
 function defaultGenerateClientInfo({ request }: GraphQLRequestContext) {
   // Default to using the `apollo-client-x` header fields if present.
