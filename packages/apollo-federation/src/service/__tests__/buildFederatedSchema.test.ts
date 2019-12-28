@@ -2,6 +2,8 @@ import gql from 'graphql-tag';
 import {
   Kind,
   graphql,
+  DocumentNode,
+  execute,
   GraphQLSchema,
   GraphQLObjectType,
   GraphQLString,
@@ -534,6 +536,129 @@ extend type User @key(fields: "email") {
     );
   });
 
+  describe('legacy interface', () => {
+    const resolvers = {
+      Query: {
+        product: () => ({}),
+      },
+      Product: {
+        upc: () => '1234',
+        price: () => 10,
+      },
+    };
+    const typeDefs: DocumentNode[] = [
+      gql`
+        type Query {
+          product: Product
+        }
+        type Product @key(fields: "upc") {
+          upc: String!
+          name: String
+        }
+      `,
+      gql`
+        extend type Product {
+          price: Int
+        }
+      `,
+    ];
+    it('allows legacy schema module interface as an input with an array of typeDefs and resolvers', async () => {
+      const schema = buildFederatedSchema({ typeDefs, resolvers });
+      expect(schema.getType('_Entity')).toMatchInlineSnapshot(
+        `union _Entity = Product`,
+      );
+      expect(
+        await execute(
+          schema,
+          gql`
+            {
+              product {
+                price
+                upc
+              }
+            }
+          `,
+        ),
+      ).toEqual({
+        data: {
+          product: { upc: '1234', price: 10 },
+        },
+      });
+    });
+    it('allows legacy schema module interface as a single module', async () => {
+      const schema = buildFederatedSchema({
+        typeDefs: gql`
+          type Query {
+            product: Product
+          }
+          type Product @key(fields: "upc") {
+            upc: String!
+            name: String
+            price: Int
+          }
+        `,
+        resolvers,
+      });
+      expect(schema.getType('_Entity')).toMatchInlineSnapshot(
+        `union _Entity = Product`,
+      );
+      expect(
+        await execute(
+          schema,
+          gql`
+            {
+              product {
+                price
+                upc
+              }
+            }
+          `,
+        ),
+      ).toEqual({
+        data: {
+          product: { upc: '1234', price: 10 },
+        },
+      });
+    });
+    it('allows legacy schema module interface as a single module without resolvers', async () => {
+      const schema = buildFederatedSchema({
+        typeDefs: gql`
+          type Query {
+            product: Product
+          }
+          type Product @key(fields: "upc") {
+            upc: String!
+            name: String
+            price: Int
+          }
+        `,
+      });
+      expect(schema.getType('Product')).toMatchInlineSnapshot(`
+  type Product {
+    upc: String!
+    name: String
+    price: Int
+  }
+  `);
+      expect(schema.getType('_Entity')).toMatchInlineSnapshot(
+        `union _Entity = Product`,
+      );
+    });
+    it('allows legacy schema module interface as a simple array of documents', async () => {
+      const schema = buildFederatedSchema({ typeDefs });
+      expect(schema.getType('Product')).toMatchInlineSnapshot(`
+  type Product {
+    upc: String!
+    name: String
+    price: Int
+  }
+  `);
+      expect(schema.getType('_Entity')).toMatchInlineSnapshot(
+        `union _Entity = Product`,
+      );
+    });
+  });
+
   it('executes resolveReference for a type if found using manually created GraphQLSchema', async () => {
     expect.assertions(5);
 
@@ -660,4 +785,31 @@ extend type User @key(fields: "email") {
     expect(data._entities[0].name).toEqual('Apollo Gateway');
     expect(data._entities[1].firstName).toEqual('James');
   });
+
+  it('keeps custom directives', async () => {
+    const query = `query GetServiceDetails {
+      _service {
+        sdl
+      }
+    }`;
+
+    const schema = buildFederatedSchema(gql`
+      directive @custom on FIELD
+
+      extend type User @key(fields: "email") {
+        email: String @external
+      }
+    `);
+
+    const { data, errors } = await graphql(schema, query);
+    expect(errors).toBeUndefined();
+    expect(data._service.sdl).toEqual(`directive @custom on FIELD
+
+extend type User @key(fields: "email") {
+email: String @external
+}
+`);
+  });
+
 });
+

@@ -12,7 +12,12 @@ import { KeyValueCache, InMemoryLRUCache } from 'apollo-server-caching';
 import { DataSource } from 'apollo-datasource';
 import { ApolloServerPlugin } from 'apollo-server-plugin-base';
 import { GraphQLParseOptions } from 'graphql-tools';
-import { GraphQLExecutor, ValueOrPromise } from 'apollo-server-types';
+import {
+  GraphQLExecutor,
+  ValueOrPromise,
+  GraphQLResponse,
+  GraphQLRequestContext,
+} from 'apollo-server-types';
 
 /*
  * GraphQLServerOptions
@@ -40,7 +45,10 @@ export interface GraphQLServerOptions<
   context?: TContext | (() => never);
   validationRules?: Array<(context: ValidationContext) => any>;
   executor?: GraphQLExecutor;
-  formatResponse?: Function;
+  formatResponse?: (
+    response: GraphQLResponse | null,
+    requestContext: GraphQLRequestContext<TContext>,
+  ) => GraphQLResponse
   fieldResolver?: GraphQLFieldResolver<any, TContext>;
   debug?: boolean;
   tracing?: boolean;
@@ -61,6 +69,14 @@ export type DataSources<TContext> = {
 
 export interface PersistedQueryOptions {
   cache: KeyValueCache;
+  /**
+   * Specified in **seconds**, this time-to-live (TTL) value limits the lifespan
+   * of how long the persisted query should be cached.  To specify a desired
+   * lifespan of "infinite", set this to `null`, in which case the eviction will
+   * be determined by the cache's eviction policy, but the record will never
+   * simply expire.
+   */
+  ttl?: number | null;
 }
 
 export default GraphQLServerOptions;

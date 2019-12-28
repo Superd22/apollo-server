@@ -3,9 +3,13 @@ import { GraphQLResolverMap } from 'apollo-graphql';
 
 export const name = 'product';
 export const typeDefs = gql`
+  directive @stream on FIELD
+  directive @transform(from: String!) on FIELD
+
   extend type Query {
     product(upc: String!): Product
     topProducts(first: Int = 5): [Product]
+    topCars(first: Int = 5): [Car]
   }
 
   type Ikea {
@@ -23,6 +27,21 @@ export const typeDefs = gql`
     sku: String!
     name: String
     price: String
+    details: ProductDetails
+  }
+
+  interface ProductDetails {
+    country: String
+  }
+
+  type ProductDetailsFurniture implements ProductDetails {
+    country: String
+    color: String
+  }
+
+  type ProductDetailsBook implements ProductDetails {
+    country: String
+    pages: Int
   }
 
   type Furniture implements Product @key(fields: "upc") @key(fields: "sku") {
@@ -31,6 +50,8 @@ export const typeDefs = gql`
     name: String
     price: String
     brand: Brand
+    metadata: [MetadataOrError]
+    details: ProductDetailsFurniture
   }
 
   extend type Book implements Product @key(fields: "isbn") {
@@ -41,7 +62,28 @@ export const typeDefs = gql`
     sku: String!
     name(delimeter: String = " "): String @requires(fields: "title year")
     price: String
+    details: ProductDetailsBook
   }
+
+  type Car @key(fields: "id") {
+    id: String!
+    price: String
+  }
+
+  # Value type
+  type KeyValue {
+    key: String!
+    value: String!
+  }
+
+  # Value type
+  type Error {
+    code: Int
+    message: String
+  }
+
+  # Value type
+  union MetadataOrError = KeyValue | Error
 `;
 
 const products = [
@@ -55,6 +97,7 @@ const products = [
       __typename: 'Ikea',
       asile: 10,
     },
+    metadata: [{ key: 'Condition', value: 'excellent' }],
   },
   {
     __typename: 'Furniture',
@@ -66,6 +109,7 @@ const products = [
       __typename: 'Amazon',
       referrer: 'https://canopy.co',
     },
+    metadata: [{ key: 'Condition', value: 'used' }],
   },
   {
     __typename: 'Furniture',
@@ -77,6 +121,7 @@ const products = [
       __typename: 'Ikea',
       asile: 10,
     },
+    metadata: [{ key: 'Condition', value: 'like new' }],
   },
   { __typename: 'Book', isbn: '0262510871', price: 39 },
   { __typename: 'Book', isbn: '0136291554', price: 29 },
@@ -84,6 +129,19 @@ const products = [
   { __typename: 'Book', isbn: '1234567890', price: 59 },
   { __typename: 'Book', isbn: '404404404', price: 0 },
   { __typename: 'Book', isbn: '0987654321', price: 29 },
+];
+
+const cars = [
+  {
+    __typename: 'Car',
+    id: '1',
+    price: 9990,
+  },
+  {
+    __typename: 'Car',
+    id: '2',
+    price: 12990,
+  },
 ];
 
 export const resolvers: GraphQLResolverMap<any> = {
@@ -116,12 +174,22 @@ export const resolvers: GraphQLResolverMap<any> = {
       return object.isbn;
     },
   },
+  Car: {
+    __resolveReference(object) {
+      return cars.find(car => car.id === object.id);
+    },
+  },
   Query: {
     product(_, args) {
       return products.find(product => product.upc === args.upc);
     },
     topProducts(_, args) {
       return products.slice(0, args.first);
+    },
+  },
+  MetadataOrError: {
+    __resolveType(object) {
+      return 'key' in object ? 'KeyValue' : 'Error';
     },
   },
 };
